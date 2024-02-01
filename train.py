@@ -1,281 +1,199 @@
 
-import os
-import random
-import time
-import datetime
-import numpy as np
-import albumentations as A
-import cv2
-from PIL import Image
-from glob import glob
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
-from torchvision import transforms
-from utils import seeding, create_dir, print_and_save, shuffling, epoch_time, calculate_metrics
-from model import TResUnet
-from metrics import DiceLoss, DiceBCELoss
+from resnet import resnet50
+import numpy as np
+import cv2
+import torch.nn.functional as F
 
-def load_names(path, file_path):
-    f = open(file_path, "r")
-    data = f.read().split("\n")[:-1]
-    images = [os.path.join(path,"images", name) + ".jpg" for name in data]
-    masks = [os.path.join(path,"masks", name) + ".jpg" for name in data]
-    return images, masks
+def save_feats_mean(x):
+    b, c, h, w = x.shape
+    if h == 256:
+        with torch.no_grad():
+            x = x.detach().cpu().numpy()
+            x = np.transpose(x[0], (1, 2, 0))
+            x = np.mean(x, axis=-1)
+            x = x/np.max(x)
+            x = x * 255.0
+            x = x.astype(np.uint8)
+            x = cv2.applyColorMap(x, cv2.COLORMAP_JET)
+            x = np.array(x, dtype=np.uint8)
+            return x
 
-def load_data(path):
-    train_names_path = f"{path}/train.txt"
-    valid_names_path = f"{path}/val.txt"
-
-    train_x, train_y = load_names(path, train_names_path)
-    valid_x, valid_y = load_names(path, valid_names_path)
-
-    return (train_x, train_y), (valid_x, valid_y)
-
-class DATASET(Dataset):
-    def __init__(self, images_path, masks_path, size, transform=None):
+class ResidualBlock(nn.Module):
+    def __init__(self, in_c, out_c):
         super().__init__()
 
-        self.images_path = images_path
-        self.masks_path = masks_path
-        self.transform = transform
-        self.n_samples = len(images_path)
+        self.relu = nn.ReLU()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_c, out_c, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_c),
+            nn.ReLU(),
+            nn.Conv2d(out_c, out_c, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_c)
+        )
+        self.shortcut = nn.Sequential(
+            nn.Conv2d(in_c, out_c, kernel_size=1, padding=0),
+            nn.BatchNorm2d(out_c)
+        )
 
-    def __getitem__(self, index):
-        """ Image """
-        image = cv2.imread(self.images_path[index], cv2.IMREAD_COLOR)
-        mask = cv2.imread(self.masks_path[index], cv2.IMREAD_GRAYSCALE)
-        # image = Image.open(self.images_path[index]).convert("RGB")
-        # mask = Image.open(self.masks_path[index]).convert("L")
+    def forward(self, inputs):
+        x1 = self.conv(inputs)
+        x2 = self.shortcut(inputs)
+        x = self.relu(x1 + x2)
+        return x
 
-        if self.transform is not None:
-            augmentations = self.transform(image=image, mask=mask)
-            image = augmentations["image"]
-            mask = augmentations["mask"]
+class EncoderBlock(nn.Module):
+    def __init__(self, in_c, out_c):
+        super().__init__()
 
-        image = cv2.resize(image, size)
-        image = np.transpose(image, (2, 0, 1))
-        image = image/255.0
+        self.r1 = ResidualBlock(in_c, out_c)
+        self.pool = nn.MaxPool2d((2, 2))
 
-        mask = cv2.resize(mask, size)
-        mask = np.expand_dims(mask, axis=0)
-        mask = mask/255.0
+    def forward(self, inputs):
+        x = self.r1(inputs)
+        p = self.pool(x)
+        return x, p
 
-        return image, mask
+class Bottleneck(nn.Module):
+    def __init__(self, in_c, out_c, dim, num_layers=2):
+        super().__init__()
 
-    def __len__(self):
-        return self.n_samples
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(in_c, out_c, kernel_size=1, padding=0),
+            nn.BatchNorm2d(out_c),
+            nn.ReLU()
+        )
 
-def train(model, loader, optimizer, loss_fn, device):
-    model.train()
+        encoder_layer = nn.TransformerEncoderLayer(d_model=dim, nhead=8)
+        self.tblock = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
-    epoch_loss = 0.0
-    epoch_jac = 0.0
-    epoch_f1 = 0.0
-    epoch_recall = 0.0
-    epoch_precision = 0.0
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(out_c, out_c, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_c),
+            nn.ReLU()
+        )
 
-    for i, (x, y) in enumerate(loader):
-        x = x.to(device, dtype=torch.float32)
-        y = y.to(device, dtype=torch.float32)
+    def forward(self, x):
+        x = self.conv1(x)
+        b, c, h, w = x.shape
+        x = x.reshape((b, c, h*w))
+        x = self.tblock(x)
+        x = x.reshape((b, c, h, w))
+        x = self.conv2(x)
+        return x
 
-        optimizer.zero_grad()
-        y_pred = model(x)
-        loss = loss_fn(y_pred, y)
-        loss.backward()
-        optimizer.step()
-        epoch_loss += loss.item()
+class DilatedConv(nn.Module):
+    def __init__(self, in_c, out_c):
+        super().__init__()
 
-        """ Calculate the metrics """
-        batch_jac = []
-        batch_f1 = []
-        batch_recall = []
-        batch_precision = []
+        self.c1 = nn.Sequential(
+            nn.Conv2d(in_c, out_c, kernel_size=3, padding=1, dilation=1),
+            nn.BatchNorm2d(out_c),
+            nn.ReLU()
+        )
 
-        for yt, yp in zip(y, y_pred):
-            score = calculate_metrics(yt, yp)
-            batch_jac.append(score[0])
-            batch_f1.append(score[1])
-            batch_recall.append(score[2])
-            batch_precision.append(score[3])
+        self.c2 = nn.Sequential(
+            nn.Conv2d(in_c, out_c, kernel_size=3, padding=3, dilation=3),
+            nn.BatchNorm2d(out_c),
+            nn.ReLU()
+        )
 
-        epoch_jac += np.mean(batch_jac)
-        epoch_f1 += np.mean(batch_f1)
-        epoch_recall += np.mean(batch_recall)
-        epoch_precision += np.mean(batch_precision)
+        self.c3 = nn.Sequential(
+            nn.Conv2d(in_c, out_c, kernel_size=3, padding=6, dilation=6),
+            nn.BatchNorm2d(out_c),
+            nn.ReLU()
+        )
 
-    epoch_loss = epoch_loss/len(loader)
-    epoch_jac = epoch_jac/len(loader)
-    epoch_f1 = epoch_f1/len(loader)
-    epoch_recall = epoch_recall/len(loader)
-    epoch_precision = epoch_precision/len(loader)
+        self.c4 = nn.Sequential(
+            nn.Conv2d(in_c, out_c, kernel_size=3, padding=9, dilation=9),
+            nn.BatchNorm2d(out_c),
+            nn.ReLU()
+        )
 
-    return epoch_loss, [epoch_jac, epoch_f1, epoch_recall, epoch_precision]
+        self.c5 = nn.Sequential(
+            nn.Conv2d(out_c*4, out_c, kernel_size=1, padding=0),
+            nn.BatchNorm2d(out_c),
+            nn.ReLU()
+        )
 
-def evaluate(model, loader, loss_fn, device):
-    model.eval()
+    def forward(self, inputs):
+        x1 = self.c1(inputs)
+        x2 = self.c2(inputs)
+        x3 = self.c3(inputs)
+        x4 = self.c4(inputs)
+        x = torch.cat([x1, x2, x3, x4], axis=1)
+        x = self.c5(x)
+        return x
 
-    epoch_loss = 0
-    epoch_loss = 0.0
-    epoch_jac = 0.0
-    epoch_f1 = 0.0
-    epoch_recall = 0.0
-    epoch_precision = 0.0
+class DecoderBlock(nn.Module):
+    def __init__(self, in_c, out_c):
+        super().__init__()
 
-    with torch.no_grad():
-        for i, (x, y) in enumerate(loader):
-            x = x.to(device, dtype=torch.float32)
-            y = y.to(device, dtype=torch.float32)
+        self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
+        self.r1 = ResidualBlock(in_c[0]+in_c[1], out_c)
+        self.r2 = ResidualBlock(out_c, out_c)
 
-            y_pred = model(x)
-            loss = loss_fn(y_pred, y)
-            epoch_loss += loss.item()
+    def forward(self, inputs, skip):
+        x = self.up(inputs)
+        x = torch.cat([x, skip], axis=1)
+        x = self.r1(x)
+        x = self.r2(x)
+        return x
 
-            """ Calculate the metrics """
-            batch_jac = []
-            batch_f1 = []
-            batch_recall = []
-            batch_precision = []
+class TResUnet(nn.Module):
+    def __init__(self):
+        super().__init__()
 
-            for yt, yp in zip(y, y_pred):
-                score = calculate_metrics(yt, yp)
-                batch_jac.append(score[0])
-                batch_f1.append(score[1])
-                batch_recall.append(score[2])
-                batch_precision.append(score[3])
+        """ ResNet50 """
+        backbone = resnet50()
+        self.layer0 = nn.Sequential(backbone.conv1, backbone.bn1, backbone.relu)
+        self.layer1 = nn.Sequential(backbone.maxpool, backbone.layer1)
+        self.layer2 = backbone.layer2
+        self.layer3 = backbone.layer3
 
-            epoch_jac += np.mean(batch_jac)
-            epoch_f1 += np.mean(batch_f1)
-            epoch_recall += np.mean(batch_recall)
-            epoch_precision += np.mean(batch_precision)
+        """ Bridge blocks """
+        self.b1 = Bottleneck(1024, 256, 1024, num_layers=2)
+        self.b2 = DilatedConv(1024, 256)
 
-        epoch_loss = epoch_loss/len(loader)
-        epoch_jac = epoch_jac/len(loader)
-        epoch_f1 = epoch_f1/len(loader)
-        epoch_recall = epoch_recall/len(loader)
-        epoch_precision = epoch_precision/len(loader)
+        """ Decoder """
+        self.d1 = DecoderBlock([512, 512], 256)
+        self.d2 = DecoderBlock([256, 256], 128)
+        self.d3 = DecoderBlock([128, 64], 64)
+        self.d4 = DecoderBlock([64, 3], 32)
 
-        return epoch_loss, [epoch_jac, epoch_f1, epoch_recall, epoch_precision]
+        self.output = nn.Conv2d(32, 3, kernel_size=1, padding='same')
+
+    def forward(self, x, heatmap=None):
+        x = F.interpolate(x, size=(512, 512), mode='bilinear', align_corners=False)
+        print(x.shape)
+        s0 = x
+        s1 = self.layer0(s0)    ## [-1, 64, h/2, w/2]
+        s2 = self.layer1(s1)    ## [-1, 256, h/4, w/4]
+        s3 = self.layer2(s2)    ## [-1, 512, h/8, w/8]
+        s4 = self.layer3(s3)    ## [-1, 1024, h/16, w/16]
+
+        b1 = self.b1(s4)
+        b2 = self.b2(s4)
+        b3 = torch.cat([b1, b2], axis=1)
+        # print(b3.shape)
+
+        d1 = self.d1(b3, s3)
+        d2 = self.d2(d1, s2)
+        d3 = self.d3(d2, s1)
+        d4 = self.d4(d3, s0)
+
+        y = self.output(d4)
+        print(y.shape)
+
+        if heatmap != None:
+            hmap = save_feats_mean(d4)
+            return hmap, y
+        else:
+            return y
 
 if __name__ == "__main__":
-    """ Seeding """
-    seeding(42)
-
-    """ Directories """
-    create_dir("files")
-
-    """ Training logfile """
-    train_log_path = "files/train_log.txt"
-    if os.path.exists(train_log_path):
-        print("Log file exists")
-    else:
-        train_log = open("files/train_log.txt", "w")
-        train_log.write("\n")
-        train_log.close()
-
-    """ Record Date & Time """
-    datetime_object = str(datetime.datetime.now())
-    print_and_save(train_log_path, datetime_object)
-    print("")
-
-    """ Hyperparameters """
-    image_size = 256
-    size = (image_size, image_size)
-    batch_size = 16
-    num_epochs = 500
-    lr = 1e-4
-    early_stopping_patience = 50
-    checkpoint_path = "files/checkpoint.pth"
-    path = "/Kvasir-SEG"
-
-    data_str = f"Image Size: {size}\nBatch Size: {batch_size}\nLR: {lr}\nEpochs: {num_epochs}\n"
-    data_str += f"Early Stopping Patience: {early_stopping_patience}\n"
-    print_and_save(train_log_path, data_str)
-
-    """ Dataset """
-    (train_x, train_y), (valid_x, valid_y) = load_data(path)
-    train_x, train_y = shuffling(train_x, train_y)
-    # train_x = train_x[:100]
-    # train_y = train_y[:100]
-    data_str = f"Dataset Size:\nTrain: {len(train_x)} - Valid: {len(valid_x)}\n"
-    print_and_save(train_log_path, data_str)
-
-    """ Data augmentation: Transforms """
-    transform =  A.Compose([
-        A.Rotate(limit=35, p=0.3),
-        A.HorizontalFlip(p=0.3),
-        A.VerticalFlip(p=0.3),
-        A.CoarseDropout(p=0.3, max_holes=10, max_height=32, max_width=32)
-    ])
-
-    """ Dataset and loader """
-    train_dataset = DATASET(train_x, train_y, size, transform=transform)
-    valid_dataset = DATASET(valid_x, valid_y, size, transform=None)
-
-    # create_dir("data")
-    # for i, (x, y) in enumerate(train_dataset):
-    #     x = np.transpose(x, (1, 2, 0)) * 255
-    #     y = np.transpose(y, (1, 2, 0)) * 255
-    #     y = np.concatenate([y, y, y], axis=-1)
-    #     cv2.imwrite(f"data/{i}.png", np.concatenate([x, y], axis=1))
-
-    train_loader = DataLoader(
-        dataset=train_dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=2
-    )
-
-    valid_loader = DataLoader(
-        dataset=valid_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=2
-    )
-
-    """ Model """
-    device = torch.device('cuda')
+    x = torch.randn((8, 3, 256, 256))
     model = TResUnet()
-    model = model.to(device)
-
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5, verbose=True)
-    loss_fn = DiceBCELoss()
-    loss_name = "BCE Dice Loss"
-    data_str = f"Optimizer: Adam\nLoss: {loss_name}\n"
-    print_and_save(train_log_path, data_str)
-
-    """ Training the model """
-    best_valid_metrics = 0.0
-    early_stopping_count = 0
-
-    for epoch in range(num_epochs):
-        start_time = time.time()
-
-        train_loss, train_metrics = train(model, train_loader, optimizer, loss_fn, device)
-        valid_loss, valid_metrics = evaluate(model, valid_loader, loss_fn, device)
-        scheduler.step(valid_loss)
-
-        if valid_metrics[1] > best_valid_metrics:
-            data_str = f"Valid F1 improved from {best_valid_metrics:2.4f} to {valid_metrics[1]:2.4f}. Saving checkpoint: {checkpoint_path}"
-            print_and_save(train_log_path, data_str)
-
-            best_valid_metrics = valid_metrics[1]
-            torch.save(model.state_dict(), checkpoint_path)
-            early_stopping_count = 0
-
-        elif valid_metrics[1] < best_valid_metrics:
-            early_stopping_count += 1
-
-        end_time = time.time()
-        epoch_mins, epoch_secs = epoch_time(start_time, end_time)
-
-        data_str = f"Epoch: {epoch+1:02} | Epoch Time: {epoch_mins}m {epoch_secs}s\n"
-        data_str += f"\tTrain Loss: {train_loss:.4f} - Jaccard: {train_metrics[0]:.4f} - F1: {train_metrics[1]:.4f} - Recall: {train_metrics[2]:.4f} - Precision: {train_metrics[3]:.4f}\n"
-        data_str += f"\t Val. Loss: {valid_loss:.4f} - Jaccard: {valid_metrics[0]:.4f} - F1: {valid_metrics[1]:.4f} - Recall: {valid_metrics[2]:.4f} - Precision: {valid_metrics[3]:.4f}\n"
-        print_and_save(train_log_path, data_str)
-
-        if early_stopping_count == early_stopping_patience:
-            data_str = f"Early stopping: validation loss stops improving from last {early_stopping_patience} continously.\n"
-            print_and_save(train_log_path, data_str)
-            break
+    y = model(x)
+    print(y.shape)
