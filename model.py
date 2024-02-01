@@ -161,7 +161,7 @@ class TResUnet(nn.Module):
         self.d3 = DecoderBlock([128, 64], 64)
         self.d4 = DecoderBlock([64, 3], 32)
 
-        self.output = nn.Conv2d(32, 1, kernel_size=1)
+        self.output = nn.Conv2d(32, 3, kernel_size=1)
 
     def forward(self, x, heatmap=None):
         s0 = x
