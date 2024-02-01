@@ -4,6 +4,7 @@ import torch.nn as nn
 from resnet import resnet50
 import numpy as np
 import cv2
+import torch.nn.functional as F
 
 def save_feats_mean(x):
     b, c, h, w = x.shape
@@ -152,7 +153,7 @@ class TResUnet(nn.Module):
         self.layer3 = backbone.layer3
 
         """ Bridge blocks """
-        self.b1 = Bottleneck(1024, 256, 256, num_layers=2)
+        self.b1 = Bottleneck(1024, 256, 1024, num_layers=2)
         self.b2 = DilatedConv(1024, 256)
 
         """ Decoder """
@@ -161,9 +162,11 @@ class TResUnet(nn.Module):
         self.d3 = DecoderBlock([128, 64], 64)
         self.d4 = DecoderBlock([64, 3], 32)
 
-        self.output = nn.Conv2d(32, 3, kernel_size=1)
+        self.output = nn.Conv2d(32, 3, kernel_size=1, padding='same')
 
     def forward(self, x, heatmap=None):
+        x = F.interpolate(x, size=(512, 512), mode='bilinear', align_corners=False)
+        print(x.shape)
         s0 = x
         s1 = self.layer0(s0)    ## [-1, 64, h/2, w/2]
         s2 = self.layer1(s1)    ## [-1, 256, h/4, w/4]
@@ -181,6 +184,7 @@ class TResUnet(nn.Module):
         d4 = self.d4(d3, s0)
 
         y = self.output(d4)
+        print(y.shape)
 
         if heatmap != None:
             hmap = save_feats_mean(d4)
