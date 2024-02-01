@@ -16,7 +16,7 @@ from train import load_data
 
 def evaluate(model, save_path, test_x, test_y, size):
     """ Loading other comparitive model masks """
-    comparison_path = "/media/nikhil/LAB/ML/ME/COMPARISON/Kvasir-SEG/"
+    comparison_path = "/Kvasir-SEG/"
 
     unet_mask = sorted(glob(os.path.join(comparison_path, "UNET", "results", "Kvasir-SEG", "mask", "*")))
     deeplabv3plus_mask = sorted(glob(os.path.join(comparison_path, "DeepLabV3+_50", "results", "Kvasir-SEG", "mask", "*")))
@@ -115,7 +115,7 @@ if __name__ == "__main__":
     model.eval()
 
     """ Test dataset """
-    path = "/media/nikhil/Seagate Backup Plus Drive/ML_DATASET/Kvasir-SEG"
+    path = "/Kvasir-SEG"
     (train_x, train_y), (test_x, test_y) = load_data(path)
 
     test_x = sorted(test_x)
