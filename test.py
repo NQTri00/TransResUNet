@@ -111,7 +111,7 @@ if __name__ == "__main__":
     model = TResUnet()
     model = model.to(device)
     checkpoint_path = "/content/drive/MyDrive/bkai/checkpoint-BKAI-IGH.pth"
-    model.load_state_dict(torch.load(checkpoint_path, map_location=device))
+    # model.load_state_dict(torch.load(checkpoint_path, map_location=device))
     model.eval()
 
     """ Test dataset """
@@ -123,8 +123,10 @@ if __name__ == "__main__":
     for file in os.listdir(test_path):
         img = test_path + file
         image = cv2.imread(img, cv2.IMREAD_COLOR)
-        size = (256, 256)
-        image = cv2.resize(image, size)
+        # print(image.shape)
+        size = (512, 512)
+        # image = cv2.resize(image, size)
+        print(image.shape)
         image = np.transpose(image, (2, 0, 1))
         image = image/255.0
         image = np.expand_dims(image, axis=0)
@@ -132,19 +134,21 @@ if __name__ == "__main__":
         image = torch.from_numpy(image)
         image = image.to(device)
         # mask = cv2.imread('/content/drive/MyDrive/bkai/train_gt/train_gt/0081835cf877e004e8bfb905b78a9139.jpeg')
-        _, y_pred = model(image, heatmap=True)
+        y_pred = model(image)
         y_pred = torch.sigmoid(y_pred)
         y_pred = y_pred[0].cpu().detach().numpy()
-        y_pred = np.squeeze(y_pred, axis=0)
-        y_pred = y_pred > 0.5
-        y_pred = y_pred.astype(np.int32)
+        print(y_pred.shape)
+        # y_pred = np.squeeze(y_pred, axis=0)
+        # y_pred = y_pred > 0.5
+        # y_pred = y_pred.astype(np.int32)
         y_pred = y_pred * 255
-        y_pred = np.array(y_pred, dtype=np.uint8)
-        y_pred = np.expand_dims(y_pred, axis=-1)
-        y_pred = np.concatenate([y_pred, y_pred, y_pred], axis=2)
-
+        # y_pred = np.array(y_pred, dtype=np.uint8)
+        # y_pred = np.expand_dims(y_pred, axis=-1)
+        # y_pred = np.concatenate([y_pred, y_pred, y_pred], axis=2)
+        y_pred = np.transpose(y_pred, (1, 2, 0))
         image = cv2.imread(img, cv2.IMREAD_COLOR)
         y_pred = cv2.resize(y_pred, (image.shape[1],image.shape[0]))
+        print(y_pred.shape)
         cv2.imwrite(f"/content/drive/MyDrive/bkai/result/{file}", y_pred)
         print(i)
         i+=1
