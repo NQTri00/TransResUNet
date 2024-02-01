@@ -11,7 +11,7 @@ import torch
 from model import TResUnet
 from utils import create_dir, seeding
 from utils import calculate_metrics
-from train import load_data
+from train import load_data, load_test_data
 
 
 def evaluate(model, save_path, test_x, test_y, size):
@@ -110,21 +110,41 @@ if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = TResUnet()
     model = model.to(device)
-    checkpoint_path = "files/checkpoint.pth"
+    checkpoint_path = "/content/drive/MyDrive/bkai/checkpoint-BKAI-IGH.pth"
     model.load_state_dict(torch.load(checkpoint_path, map_location=device))
     model.eval()
 
     """ Test dataset """
     path = "/Kvasir-SEG"
-    (train_x, train_y), (test_x, test_y) = load_data(path)
+    # (train_x, train_y), (test_x, test_y) = load_data(path)
+    # test_x = load_test_data(path)
+    test_path = '/content/drive/MyDrive/bkai/test/test/'
+    i = 1
+    for file in os.listdir(test_path):
+        img = test_path + file
+        image = cv2.imread(img, cv2.IMREAD_COLOR)
+        size = (256, 256)
+        image = cv2.resize(image, size)
+        image = np.transpose(image, (2, 0, 1))
+        image = image/255.0
+        image = np.expand_dims(image, axis=0)
+        image = image.astype(np.float32)
+        image = torch.from_numpy(image)
+        image = image.to(device)
+        # mask = cv2.imread('/content/drive/MyDrive/bkai/train_gt/train_gt/0081835cf877e004e8bfb905b78a9139.jpeg')
+        _, y_pred = model(image, heatmap=True)
+        y_pred = torch.sigmoid(y_pred)
+        y_pred = y_pred[0].cpu().detach().numpy()
+        y_pred = np.squeeze(y_pred, axis=0)
+        y_pred = y_pred > 0.5
+        y_pred = y_pred.astype(np.int32)
+        y_pred = y_pred * 255
+        y_pred = np.array(y_pred, dtype=np.uint8)
+        y_pred = np.expand_dims(y_pred, axis=-1)
+        y_pred = np.concatenate([y_pred, y_pred, y_pred], axis=2)
 
-    test_x = sorted(test_x)
-    test_y = sorted(test_y)
-
-    save_path = f"results/Kvasir-SEG"
-    for item in ["mask", "joint", "heatmap"]:
-        create_dir(f"{save_path}/{item}")
-
-    size = (256, 256)
-    create_dir(save_path)
-    evaluate(model, save_path, test_x, test_y, size)
+        image = cv2.imread(img, cv2.IMREAD_COLOR)
+        y_pred = cv2.resize(y_pred, (image.shape[1],image.shape[0]))
+        cv2.imwrite(f"/content/drive/MyDrive/bkai/result/{file}", y_pred)
+        print(i)
+        i+=1
