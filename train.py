@@ -58,7 +58,7 @@ class DATASET(Dataset):
     def __getitem__(self, index):
         """ Image """
         image = cv2.imread(self.images_path[index], cv2.IMREAD_COLOR)
-        mask = cv2.imread(self.masks_path[index], cv2.IMREAD_GRAYSCALE)
+        mask = cv2.imread(self.masks_path[index], cv2.IMREAD_COLOR)
         # image = Image.open(self.images_path[index]).convert("RGB")
         # mask = Image.open(self.masks_path[index]).convert("L")
 
