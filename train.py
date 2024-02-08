@@ -25,8 +25,8 @@ def load_names(path, file_path):
     data = f.read().split("\n")[:-1]
     # images = [os.path.join(path,"images", name) + ".jpeg" for name in data]
     # masks = [os.path.join(path,"masks", name) + ".jpeg" for name in data]
-    images = [os.path.join("content/drive/MyDrive/bkai/train/train", name) + ".jpeg" for name in data]
-    masks = [os.path.join("content/drive/MyDrive/bkai/train_gt/train_gt", name) + ".jpeg" for name in data]
+    images = [os.path.join("/kaggle/input/bkai-igh-neopolyp/train/train", name) + ".jpeg" for name in data]
+    masks = [os.path.join("/kaggle/input/bkai-igh-neopolyp/train_gt/train_gt", name) + ".jpeg" for name in data]
     return images, masks
 
 def load_data(path):
@@ -200,7 +200,7 @@ if __name__ == "__main__":
     lr = 1e-4
     early_stopping_patience = 50
     checkpoint_path = "files/checkpoint.pth"
-    path = "/content/TransResUNet/Kvasir-SEG"
+    path = "/kaggle/working/TransResUNet/Kvasir-SEG"
 
     data_str = f"Image Size: {size}\nBatch Size: {batch_size}\nLR: {lr}\nEpochs: {num_epochs}\n"
     data_str += f"Early Stopping Patience: {early_stopping_patience}\n"
