@@ -100,6 +100,7 @@ def train(model, loader, optimizer, loss_fn, device):
         optimizer.step()
         epoch_loss += loss.item()
         wandb.log({"Train loss step": loss.item()})
+        print(f"\tTrain Loss step {i}: {loss.item():.4f}\n")
 
         """ Calculate the metrics """
         batch_jac = []
