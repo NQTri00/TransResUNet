@@ -193,7 +193,7 @@ if __name__ == "__main__":
     print("")
 
     """ Hyperparameters """
-    image_size = 512
+    image_size = 256
     size = (image_size, image_size)
     batch_size = 16
     num_epochs = 50
