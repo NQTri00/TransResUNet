@@ -99,6 +99,7 @@ def train(model, loader, optimizer, loss_fn, device):
         loss.backward()
         optimizer.step()
         epoch_loss += loss.item()
+        wandb.log({"Train loss step": loss.item()})
 
         """ Calculate the metrics """
         batch_jac = []
@@ -112,11 +113,13 @@ def train(model, loader, optimizer, loss_fn, device):
             batch_f1.append(score[1])
             batch_recall.append(score[2])
             batch_precision.append(score[3])
+            wandb.log({"Valid loss step": score[3]})
 
         epoch_jac += np.mean(batch_jac)
         epoch_f1 += np.mean(batch_f1)
         epoch_recall += np.mean(batch_recall)
         epoch_precision += np.mean(batch_precision)
+        
 
     epoch_loss = epoch_loss/len(loader)
     epoch_jac = epoch_jac/len(loader)
