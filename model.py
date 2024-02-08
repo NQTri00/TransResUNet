@@ -166,7 +166,7 @@ class TResUnet(nn.Module):
 
     def forward(self, x, heatmap=None):
         # x = F.interpolate(x, size=(512, 512), mode='bilinear', align_corners=False)
-        print(x.shape)
+        # print(x.shape)
         s0 = x
         s1 = self.layer0(s0)    ## [-1, 64, h/2, w/2]
         s2 = self.layer1(s1)    ## [-1, 256, h/4, w/4]
