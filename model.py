@@ -184,7 +184,7 @@ class TResUnet(nn.Module):
         d4 = self.d4(d3, s0)
 
         y = self.output(d4)
-        print(y.shape)
+        # print(y.shape)
 
         if heatmap != None:
             hmap = save_feats_mean(d4)
