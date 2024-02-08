@@ -153,7 +153,7 @@ class TResUnet(nn.Module):
         self.layer3 = backbone.layer3
 
         """ Bridge blocks """
-        self.b1 = Bottleneck(1024, 256, 1024, num_layers=2)
+        self.b1 = Bottleneck(1024, 256, 256, num_layers=2)
         self.b2 = DilatedConv(1024, 256)
 
         """ Decoder """
@@ -165,7 +165,7 @@ class TResUnet(nn.Module):
         self.output = nn.Conv2d(32, 3, kernel_size=1, padding='same')
 
     def forward(self, x, heatmap=None):
-        x = F.interpolate(x, size=(512, 512), mode='bilinear', align_corners=False)
+        # x = F.interpolate(x, size=(512, 512), mode='bilinear', align_corners=False)
         print(x.shape)
         s0 = x
         s1 = self.layer0(s0)    ## [-1, 64, h/2, w/2]
