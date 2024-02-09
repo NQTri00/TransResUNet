@@ -114,7 +114,7 @@ def train(model, loader, optimizer, loss_fn, device):
             batch_f1.append(score[1])
             batch_recall.append(score[2])
             batch_precision.append(score[3])
-            wandb.log({"Valid loss step": score[3]})
+            wandb.log({"Train precision step": score[3]})
 
         epoch_jac += np.mean(batch_jac)
         epoch_f1 += np.mean(batch_f1)
@@ -148,6 +148,7 @@ def evaluate(model, loader, loss_fn, device):
             y_pred = model(x)
             loss = loss_fn(y_pred, y)
             epoch_loss += loss.item()
+            wandb.log({"Valid loss step": loss.item()})
 
             """ Calculate the metrics """
             batch_jac = []
@@ -161,6 +162,7 @@ def evaluate(model, loader, loss_fn, device):
                 batch_f1.append(score[1])
                 batch_recall.append(score[2])
                 batch_precision.append(score[3])
+                wandb.log({"Valid precision step": score[3]})
 
             epoch_jac += np.mean(batch_jac)
             epoch_f1 += np.mean(batch_f1)
